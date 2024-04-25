@@ -12,7 +12,10 @@ and the source code when available.
 
 `include` or `require` `error_explorer.lua`
 in your program _after_ defining your `_update`
-and `_draw` functions
+and `_draw` functions.
+
+press `up` and `down` to move up and down on the stack,
+press `x` or `space` to toggle font size.
 
 ## how it works
 
