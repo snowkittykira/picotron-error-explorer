@@ -2,7 +2,7 @@
 --
 -- by kira
 --
--- version 0.0.3
+-- version 0.0.4
 --
 -- an interactive error screen for picotron.
 -- on error, shows the stack, local variables,
@@ -11,18 +11,19 @@
 -- ## usage
 --
 -- `include` or `require` `error_explorer.lua`
--- in your program _after_ defining your `_update`
--- and `_draw` functions.
+-- in your program _after_ defining your `_init`,
+-- `_update`, and `_draw` functions.
 --
 -- press `up` and `down` to move up and down on
 -- the stack, press `x` or `space` to toggle font
--- size.
+-- size. click on tables in the variable view to
+-- expand them.
 --
 -- ## how it works
 --
 -- in order to catch errors and inspect runtime
--- state, this script replaces `_update` and
--- `_draw` functions with ones that call the
+-- state, this script replaces `_init`, `_update`
+-- and `_draw` functions with ones that call the
 -- original ones inside a coroutine.
 --
 -- when there's an error, it uses lua's debug
@@ -39,6 +40,10 @@
 -- - `debug.traceback`
 --
 -- ## version history 
+--
+-- version 0.0.4
+--
+-- - also catch errors in `_init`
 --
 -- version 0.0.3
 --
@@ -163,6 +168,7 @@ local _G = _G
 local error_message
 local error_thread
 local error_traceback
+local init_done = false
 local use_small_font = false
 local mouse_was_clicked = false
 
@@ -185,6 +191,7 @@ local mouse_over_variables = false
 
 -- source view
 local source_lines = {}
+
 
 ---- main events ---------------------------------
 
@@ -453,7 +460,10 @@ local function reset ()
   -- based on reset() from /system/lib/head.lua
   -- see that fn for info
   note ()
-  clip ()
+  -- picotron segfaults if we call clip() during init
+  if init_done then
+    clip ()
+  end
   camera ()
   pal ()
   palt ()
@@ -477,10 +487,10 @@ end
 local function on_error (thread, message)
   -- do this first in case we hit another error
   error_traceback = debug.traceback (thread, message)
+  printh (error_traceback)
 
   error_thread = thread
   error_message = tostring (message)
-  printh (error_traceback)
   reset ()
   rebuild ()
   -- jump to the proper stack frame if we can
@@ -496,6 +506,7 @@ end
 
 ---- install main events that catch errors -------
 
+local user_init = rawget (_G, '_init')
 local user_update = rawget (_G, '_update')
 local user_draw = rawget (_G, '_draw')
 
@@ -522,6 +533,15 @@ local function call_protected (fn)
   if not success then
     call_error_event (on_error, thread, message)
   end
+end
+
+if user_init then
+  function _init ()
+    call_protected (user_init)
+    init_done = true
+  end
+else
+  init_done = true
 end
 
 function _update ()
