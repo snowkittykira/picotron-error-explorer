@@ -2,7 +2,7 @@
 --
 -- by kira
 --
--- version 0.0.1
+-- version 0.0.2(dev)
 --
 -- an interactive error screen for picotron.
 -- on error, shows the stack, local variables,
@@ -35,6 +35,11 @@
 -- - `debug.traceback`
 --
 -- ## version history 
+--
+-- version 0.0.2
+--
+-- - don't regenerate stack info every draw
+-- - click on table variables to expand them
 --
 -- version 0.0.1
 --
@@ -105,6 +110,8 @@ local current_index = 1
 local stack_frames = {}
 local variables = {}
 local source_lines = {}
+local hovered_variable = false
+local mouse_was_clicked = false
 
 ---- main events ---------------------------------
 
@@ -197,6 +204,27 @@ local function error_update ()
   if btnp (3) then
     current_index = math.min (#stack_frames, current_index + 1)
   end
+
+  local _, _, click = mouse ()
+  click = click ~= 0
+  if click and not mouse_was_clicked then
+    if hovered_variable and type (hovered_variable.value) == 'table' then
+      if hovered_variable.contents then
+        hovered_variable.contents = nil
+      else
+        local contents = {}
+        hovered_variable.contents = contents
+        for k,v in pairs (hovered_variable.value) do
+          table.insert (contents, {
+            key = k,
+            value = v,
+          })
+        end
+      end
+    end
+  end
+  mouse_was_clicked = click
+
   if current_index ~= last_index then
     rebuild()
   end
@@ -256,11 +284,31 @@ local function error_draw ()
 
   -- variables
   section (0, H/2, W/2, H/2)
+  local mx, my = mouse()
+  local last_hovered_variable = hovered_variable
+  hovered_variable = false
+  local function draw_variable (variable, indent)
+    local hovered = variable == last_hovered_variable
+    local y_before = y
+    print_horizontal (indent .. variable.key, hovered and 7 or 6)
+    print_horizontal (': ', variable == last_hovered_variable and 7 or 5)
+    print_line (safe_tostring(variable.value))
+
+    if type (variable.value) == 'table' then
+      if mx >= 0 and mx < W/2 and my >= y_before and my < y then
+        hovered_variable = variable
+      end
+    end
+
+    if variable.contents then
+      for _, v in ipairs (variable.contents) do
+        draw_variable (v, indent .. '  ')
+      end
+    end
+  end
   print_line ('variables:', 6)
   for _, variable in ipairs (variables) do
-    print_horizontal ('  ' .. variable.key, 6)
-    print_horizontal (': ', 5)
-    print_line (safe_tostring(variable.value))
+    draw_variable (variable, '  ')
   end
 
   -- source
