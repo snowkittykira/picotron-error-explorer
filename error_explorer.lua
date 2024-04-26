@@ -2,7 +2,7 @@
 --
 -- by kira
 --
--- version 0.0.2
+-- version 0.0.3
 --
 -- an interactive error screen for picotron.
 -- on error, shows the stack, local variables,
@@ -14,8 +14,9 @@
 -- in your program _after_ defining your `_update`
 -- and `_draw` functions.
 --
--- press `up` and `down` to move up and down on the stack,
--- press `x` or `space` to toggle font size.
+-- press `up` and `down` to move up and down on
+-- the stack, press `x` or `space` to toggle font
+-- size.
 --
 -- ## how it works
 --
@@ -25,7 +26,10 @@
 -- original ones inside a coroutine.
 --
 -- when there's an error, it uses lua's debug
--- library to inspect the coroutine.
+-- library to inspect the coroutine. a copy
+-- of the error is also printed to the console
+-- with printh if you're running picotron from
+-- the command line.
 --
 -- the following debug apis are used:
 --
@@ -35,6 +39,13 @@
 -- - `debug.traceback`
 --
 -- ## version history 
+--
+-- version 0.0.3
+--
+-- - automatically choose the right stack frame
+--   based on the error message
+-- - more thoroughly protect from errors in error
+--   explorer itself
 --
 -- version 0.0.2
 --
@@ -139,6 +150,11 @@ end
 
 local function round (value)
   return math.floor (value + 0.5)
+end
+
+local function parse_message_for_location (msg)
+  local path, line, err = msg:match ('^([^:]+):(%d+):(.*)$')
+  return path, tonumber (line), err
 end
 
 ---- state ---------------------------------------
@@ -345,9 +361,9 @@ local function error_draw ()
   section (0, 0, W, H/2)
   mouse_over_stack = over_section
 
-  local loc, err = error_message:match ('^([^:]+:%d+):(.*)$')
-  if loc then
-    print_line ('error at ' .. loc .. ':', 6)
+  local loc_path, loc_line, err = parse_message_for_location (error_message)
+  if loc_path then
+    print_line ('error at ' .. loc_path .. ':' .. loc_line .. ':', 6)
     print_line ('  ' .. err, 8)
   else
     print_line ('error:', 6)
@@ -459,12 +475,23 @@ local function reset ()
 end
 
 local function on_error (thread, message)
+  -- do this first in case we hit another error
+  error_traceback = debug.traceback (thread, message)
+
   error_thread = thread
   error_message = tostring (message)
-  error_traceback = debug.traceback (thread, message)
   printh (error_traceback)
   reset ()
   rebuild ()
+  -- jump to the proper stack frame if we can
+  local loc_path, loc_line = parse_message_for_location (error_message)
+  for i, frame in ipairs (stack_frames) do
+    if frame.path == loc_path and frame.line == loc_line then
+      current_stack_index = i
+      rebuild ()
+      break
+    end
+  end
 end
 
 ---- install main events that catch errors -------
@@ -475,12 +502,12 @@ local user_draw = rawget (_G, '_draw')
 assert (user_draw and user_update,
   'please include install_error_handler after defining both _update and _draw')
 
-local function call_error_event (fn)
+local function call_error_event (fn, ...)
   -- if there's an error in our update or draw, throw the
   -- original error as well as the new error
-  local success, err = pcall (fn)
+  local success, err = pcall (fn, ...)
   if not success then
-    error (error_traceback .. '\n\nerror during error handling: ' .. err)
+    error (error_traceback .. '\n\nerror during error handling: ' .. tostring (err))
   end
 end
 
@@ -490,10 +517,10 @@ local function call_protected (fn)
   local thread = cocreate (fn)
   local success, message = coresume(thread)
   if costatus (thread) ~= 'dead' then
-    on_error (thread, 'setup_error_display.lua: _update and _draw shouldn\'t yield')
+    call_error_event (on_error, thread, 'setup_error_display.lua: _update and _draw shouldn\'t yield')
   end
   if not success then
-    on_error (thread, message)
+    call_error_event (on_error, thread, message)
   end
 end
 
