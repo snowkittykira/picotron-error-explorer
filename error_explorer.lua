@@ -2,7 +2,7 @@
 --
 -- by kira
 --
--- version 0.0.2(dev)
+-- version 0.0.2
 --
 -- an interactive error screen for picotron.
 -- on error, shows the stack, local variables,
@@ -39,7 +39,10 @@
 -- version 0.0.2
 --
 -- - don't regenerate stack info every draw
--- - click on table variables to expand them
+-- - scroll stack and variables list with mousewheel
+-- - click on stack to switch stack frames
+-- - click on tables in variables view to expand them
+-- - escape strings when printing them
 --
 -- version 0.0.1
 --
@@ -82,9 +85,13 @@ local function filename_of (path)
 end
 
 local function safe_tostring (value)
-  local success, value_string = pcall (tostring, value)
-  return success and value_string
-                 or ('error during tostring: ' .. tostring (value_string))
+  if type (value) == 'string' then
+    return string.format ('%q', value)
+  else
+    local success, value_string = pcall (tostring, value)
+    return success and value_string
+                   or ('error during tostring: ' .. tostring (value_string))
+  end
 end
 
 local function get_lines (text)
@@ -99,6 +106,41 @@ local function get_lines (text)
   return lines
 end
 
+local function compare_keys (a, b)
+  local ta = type (a.key)
+  local tb = type (b.key)
+  if ta ~= tb then
+    return ta < tb
+  end
+  if ta == 'number' or ta == 'string' then
+    return a.key < b.key
+  else
+    return safe_tostring (a.key) < safe_tostring (b.key)
+  end
+end
+
+local function sort (t, f)
+  -- insertion sort
+  f = f or function (a, b) return a < b end
+  for i = 1, #t-1 do
+    local val = t[i+1]
+    local j = i
+    while j >= 1 and not f(t[j], val) do
+      t[j+1] = t[j]
+      j = j - 1
+    end
+    t[j+1] = val
+  end
+end
+
+local function approach (from, to)
+  return from + (to - from) * 0.25
+end
+
+local function round (value)
+  return math.floor (value + 0.5)
+end
+
 ---- state ---------------------------------------
 
 local _G = _G
@@ -106,12 +148,27 @@ local error_message
 local error_thread
 local error_traceback
 local use_small_font = false
-local current_index = 1
-local stack_frames = {}
-local variables = {}
-local source_lines = {}
-local hovered_variable = false
 local mouse_was_clicked = false
+
+-- stack view
+local stack_frames = {}
+local current_stack_index = 1
+local hovered_stack_index = false
+local mouse_over_stack = false
+local stack_max_scroll = 0
+local stack_scroll = 0
+local stack_scroll_smooth = 0
+
+-- variables view
+local variables = {}
+local hovered_variable = false
+local variables_max_scroll = 0
+local variables_scroll = 0
+local variables_scroll_smooth = 0
+local mouse_over_variables = false
+
+-- source view
+local source_lines = {}
 
 ---- main events ---------------------------------
 
@@ -123,6 +180,8 @@ local function rebuild ()
   stack_frames = {}
   variables = {}
   source_lines = {}
+  variables_scroll = 0
+  variables_scroll_smooth = 0
 
   for i = 0, 20 do
     local info = debug.getinfo (error_thread, i)
@@ -142,7 +201,7 @@ local function rebuild ()
     end
   end
 
-  local frame = stack_frames [current_index]
+  local frame = stack_frames [current_stack_index]
 
   if not frame then
     return
@@ -194,20 +253,34 @@ local function rebuild ()
 end
 
 local function error_update ()
-  local last_index = current_index
+  local last_index = current_stack_index
   if btnp (5) or keyp 'space' then
     use_small_font = not use_small_font
   end
   if btnp (2) then
-    current_index = math.max (1, current_index - 1)
+    current_stack_index = math.max (1, current_stack_index - 1)
+    stack_scroll = math.min (current_stack_index-1, stack_scroll)
   end
   if btnp (3) then
-    current_index = math.min (#stack_frames, current_index + 1)
+    current_stack_index = math.min (#stack_frames, current_stack_index + 1)
+    stack_scroll = math.max ((current_stack_index) - (#stack_frames - stack_max_scroll), stack_scroll)
   end
 
-  local _, _, click = mouse ()
+  local _, _, click, _, wheel = mouse ()
+  if mouse_over_stack then
+    stack_scroll = math.max (0, math.min (stack_scroll - wheel * 2, stack_max_scroll))
+  end
+  stack_scroll_smooth = approach (stack_scroll_smooth, stack_scroll)
+  if mouse_over_variables then
+    variables_scroll = math.max (0, math.min (variables_scroll - wheel * 2, variables_max_scroll))
+  end
+  variables_scroll_smooth = approach (variables_scroll_smooth, variables_scroll)
+
   click = click ~= 0
   if click and not mouse_was_clicked then
+    if hovered_stack_index then
+      current_stack_index = hovered_stack_index
+    end
     if hovered_variable and type (hovered_variable.value) == 'table' then
       if hovered_variable.contents then
         hovered_variable.contents = nil
@@ -220,22 +293,23 @@ local function error_update ()
             value = v,
           })
         end
+        sort (contents, compare_keys)
       end
     end
   end
   mouse_was_clicked = click
 
-  if current_index ~= last_index then
+  if current_stack_index ~= last_index then
     rebuild()
   end
 end
 
 local function error_draw ()
-  cls (0)
-  pal (5, 0xff707070, 2)
-  local x0, y0, x, y
-  color (5)
   local prefix = use_small_font and '\014' or ''
+  local font_height = (use_small_font and 6 or 11)
+  local mx, my = mouse()
+  local over_section = false
+  local x0, y0, x, y
 
   local function go_to (new_x, new_y)
     x0, y0 = new_x, new_y
@@ -243,6 +317,9 @@ local function error_draw ()
   end
 
   local function section (sx, sy, sw, sh)
+    over_section =
+      mx >= sx and mx < sx + sw and
+      my >= sy and my < sy + sh
     clip (sx, sy, sw, sh)
     go_to(sx+2, sy+2)
   end
@@ -258,8 +335,16 @@ local function error_draw ()
     y = new_y
   end
 
+  -- draw setup
+  cls (0)
+  -- lighter dark gray for readability
+  pal (5, 0xff707070, 2)
+  color (5)
+
   -- error message
   section (0, 0, W, H/2)
+  mouse_over_stack = over_section
+
   local loc, err = error_message:match ('^([^:]+:%d+):(.*)$')
   if loc then
     print_line ('error at ' .. loc .. ':', 6)
@@ -271,30 +356,50 @@ local function error_draw ()
 
   -- stack frames
   print_line ('stack:', 6)
+  section (0, y, W, H/2-y)
+  local stack_top_y = y
+  y = y - round (stack_scroll_smooth * font_height)
+  local last_hovered_stack_index = hovered_stack_index
+  hovered_stack_index = false
   for i, frame in ipairs (stack_frames) do
-    color (current_index == i and 6 or 5)
+    color (last_hovered_stack_index == i and 7 or
+           current_stack_index == i and 6 or 5)
+
+   local y_before = y
     print_line (string.format ('  %s:%d in function %s',
       frame.filename, frame.line, frame.fn_name ))
+    if over_section then
+      if my >= y_before and my < y then
+        hovered_stack_index = i
+      end
+    end
   end
+  stack_max_scroll = #stack_frames - (H/2 - stack_top_y) / font_height
 
-  local frame = stack_frames [current_index]
+  local frame = stack_frames [current_stack_index]
   if not frame then
     return
   end
 
   -- variables
   section (0, H/2, W/2, H/2)
-  local mx, my = mouse()
+  mouse_over_variables = over_section
+  print_line ('variables:', 6)
+  section (0, y, W/2, H-y)
+  local variables_top_y = y
+  y = y - round (variables_scroll_smooth * font_height)
   local last_hovered_variable = hovered_variable
   hovered_variable = false
+  local variable_count = 0
   local function draw_variable (variable, indent)
+    variable_count = variable_count + 1
     local hovered = variable == last_hovered_variable
     local y_before = y
     print_horizontal (indent .. variable.key, hovered and 7 or 6)
     print_horizontal (': ', variable == last_hovered_variable and 7 or 5)
     print_line (safe_tostring(variable.value))
 
-    if type (variable.value) == 'table' then
+    if over_section and type (variable.value) == 'table' then
       if mx >= 0 and mx < W/2 and my >= y_before and my < y then
         hovered_variable = variable
       end
@@ -306,10 +411,10 @@ local function error_draw ()
       end
     end
   end
-  print_line ('variables:', 6)
   for _, variable in ipairs (variables) do
     draw_variable (variable, '  ')
   end
+  variables_max_scroll = variable_count - (H - variables_top_y) / font_height
 
   -- source
   section (W/2, H/2, W/2, H/2)

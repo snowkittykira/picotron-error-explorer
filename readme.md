@@ -2,7 +2,7 @@
 
 by kira
 
-version 0.0.1
+version 0.0.2
 
 an interactive error screen for picotron.
 on error, shows the stack, local variables,
@@ -35,6 +35,14 @@ the following debug apis are used:
 - `debug.traceback`
 
 ## version history 
+
+version 0.0.2
+
+- don't regenerate stack info every draw
+- scroll stack and variables list with mousewheel
+- click on stack to switch stack frames
+- click on tables in variables view to expand them
+- escape strings when printing them
 
 version 0.0.1
 
