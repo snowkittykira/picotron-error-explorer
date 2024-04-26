@@ -2,7 +2,7 @@
 
 by kira
 
-version 0.0.2
+version 0.0.3
 
 an interactive error screen for picotron.
 on error, shows the stack, local variables,
@@ -14,8 +14,9 @@ and the source code when available.
 in your program _after_ defining your `_update`
 and `_draw` functions.
 
-press `up` and `down` to move up and down on the stack,
-press `x` or `space` to toggle font size.
+press `up` and `down` to move up and down on
+the stack, press `x` or `space` to toggle font
+size.
 
 ## how it works
 
@@ -25,7 +26,10 @@ state, this script replaces `_update` and
 original ones inside a coroutine.
 
 when there's an error, it uses lua's debug
-library to inspect the coroutine.
+library to inspect the coroutine. a copy
+of the error is also printed to the console
+with printh if you're running picotron from
+the command line.
 
 the following debug apis are used:
 
@@ -35,6 +39,13 @@ the following debug apis are used:
 - `debug.traceback`
 
 ## version history 
+
+version 0.0.3
+
+- automatically choose the right stack frame
+  based on the error message
+- more thoroughly protect from errors in error
+  explorer itself
 
 version 0.0.2
 
