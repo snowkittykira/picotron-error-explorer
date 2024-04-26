@@ -87,6 +87,10 @@ local function get_lines (text)
   for line in text:gmatch ("(.-)\r?\n") do
     table.insert (lines, line)
   end
+  local last_line = text:match ('([^\n]*)$')
+  if last_line and last_line ~= '' then
+    table.insert (lines, last_line)
+  end
   return lines
 end
 
@@ -96,23 +100,105 @@ local _G = _G
 local error_message
 local error_thread
 local error_traceback
-local current_index = 0
 local use_small_font = false
+local current_index = 1
+local stack_frames = {}
+local variables = {}
+local source_lines = {}
 
 ---- main events ---------------------------------
 
 local W = 480
 local H = 270
 
+local function rebuild ()
+  -- rebuild stack frame info
+  stack_frames = {}
+  variables = {}
+  source_lines = {}
+
+  for i = 0, 20 do
+    local info = debug.getinfo (error_thread, i)
+    if not info then
+      break
+    end
+
+    if info.short_src then
+      table.insert (stack_frames, {
+        filename = filename_of (info.short_src),
+        path = info.short_src,
+        line = info.currentline,
+        depth = i,
+        fn_name = (info.name or (filename_of (info.short_src) .. ':' .. tostring (info.linedefined))),
+        source = info.source,
+      })
+    end
+  end
+
+  local frame = stack_frames [current_index]
+
+  if not frame then
+    return
+  end
+
+  -- rebuild variables
+  do
+    local local_index = 1
+    repeat
+      local name, value = debug.getlocal (error_thread, frame.depth, local_index)
+      if name then
+        if name ~= '(temporary)' then
+          table.insert (variables, {
+            key = name,
+            value = value,
+          })
+        end
+        local_index = local_index + 1
+      end
+    until not name
+
+    local info = debug.getinfo (error_thread, frame.depth)
+    if info and info.func then
+      local upvalue_index = 1
+      repeat
+        local name, value = debug.getupvalue (info.func, upvalue_index)
+        if name then
+          table.insert (variables, {
+            key = name,
+            value = value,
+          })
+          upvalue_index = upvalue_index + 1
+        end
+      until not name
+    end
+  end
+
+  -- rebuild source lines
+  local source = frame.source
+  if source then
+    if string.sub (source, 1, 1) == '@' then
+      local filename = string.sub (source, 2, #source)
+      source = fetch (filename)
+    end
+    if source and type (source) == 'string' then
+      source_lines = get_lines (source)
+    end
+  end
+end
+
 local function error_update ()
+  local last_index = current_index
   if btnp (5) or keyp 'space' then
     use_small_font = not use_small_font
   end
   if btnp (2) then
-    current_index = math.max (0, current_index - 1)
+    current_index = math.max (1, current_index - 1)
   end
   if btnp (3) then
-    current_index = current_index + 1
+    current_index = math.min (#stack_frames, current_index + 1)
+  end
+  if current_index ~= last_index then
+    rebuild()
   end
 end
 
@@ -144,6 +230,7 @@ local function error_draw ()
     y = new_y
   end
 
+  -- error message
   section (0, 0, W, H/2)
   local loc, err = error_message:match ('^([^:]+:%d+):(.*)$')
   if loc then
@@ -153,84 +240,39 @@ local function error_draw ()
     print_line ('error:', 6)
     print_line ('  ' .. error_message, 8)
   end
+
+  -- stack frames
   print_line ('stack:', 6)
-  color (5)
-  for i = 0, 20 do
-    local info = debug.getinfo (error_thread, i)
-    if not info then
-      if current_index >= i then
-        current_index = i-1
-      end
-      break
-    end
-
-    if info.short_src then
-      color (current_index == i and 6 or 5)
-      print_horizontal ('  ' .. filename_of (info.short_src))
-      print_horizontal (':')
-      print_horizontal (tostring (info.currentline))
-      print_horizontal (' in function ')
-      print_horizontal (info.name or (filename_of (info.short_src) .. ':' .. tostring (info.linedefined)))
-      print_line ('')
-    end
+  for i, frame in ipairs (stack_frames) do
+    color (current_index == i and 6 or 5)
+    print_line (string.format ('  %s:%d in function %s',
+      frame.filename, frame.line, frame.fn_name ))
   end
 
+  local frame = stack_frames [current_index]
+  if not frame then
+    return
+  end
+
+  -- variables
   section (0, H/2, W/2, H/2)
-  do
-    print_line ('variables:', 6)
-    local local_index = 1
-    repeat
-      local name, value = debug.getlocal (error_thread, current_index, local_index)
-      if name then
-        if name ~= '(temporary)' then
-          print_horizontal ('  ' .. name, 6)
-          print_horizontal (': ', 5)
-          print_line (safe_tostring(value))
-        end
-        local_index = local_index + 1
-      end
-    until not name
-
-    local info = debug.getinfo (error_thread, current_index)
-    if info and info.func then
-      local upvalue_index = 1
-      repeat
-        local name, value = debug.getupvalue (info.func, upvalue_index)
-        if name then
-          print_horizontal ('  ' .. name, 6)
-          print_line (': ' .. safe_tostring (value), 5)
-          upvalue_index = upvalue_index + 1
-        end
-      until not name
-    end
+  print_line ('variables:', 6)
+  for _, variable in ipairs (variables) do
+    print_horizontal ('  ' .. variable.key, 6)
+    print_horizontal (': ', 5)
+    print_line (safe_tostring(variable.value))
   end
 
+  -- source
   section (W/2, H/2, W/2, H/2)
-  do
-    local info = debug.getinfo (error_thread, current_index)
-    local source = info.source
-    if source then
-      color (6)
-      if string.sub (source, 1, 1) == '@' then
-        local filename = string.sub (source, 2, #source)
-        print_line ('source of ' .. filename .. ':')
-        source = fetch (filename)
-      else
-        print_line ('source:')
-      end
-      color (5)
-      if source and type(source) == 'string' then
-        local lines = get_lines (source)
-        local context = use_small_font and 10 or 5
-        local i_min = math.max (1, info.currentline - context)
-        local i_max = math.min (#lines, info.currentline + context)
-        for i = i_min, i_max do
-          color (i == info.currentline and 6 or 5)
-          print_horizontal (string.format ('%4d ', i))
-          print_line (lines [i])
-        end
-      end
-    end
+  print_line ('source of ' .. frame.path .. ':', 6)
+  local context = use_small_font and 10 or 5
+  local i_min = math.max (1, frame.line - context)
+  local i_max = math.min (#source_lines, frame.line + context)
+  for i = i_min, i_max do
+    color (i == frame.line and 6 or 5)
+    print_horizontal (string.format ('%4d ', i))
+    print_line (source_lines [i])
   end
 
   clip ()
@@ -265,10 +307,11 @@ end
 
 local function on_error (thread, message)
   error_thread = thread
-  error_message = message
+  error_message = tostring (message)
   error_traceback = debug.traceback (thread, message)
   printh (error_traceback)
   reset ()
+  rebuild ()
 end
 
 ---- install main events that catch errors -------
