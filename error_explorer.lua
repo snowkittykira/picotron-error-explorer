@@ -2,7 +2,7 @@
 --
 -- by kira
 --
--- version 0.0.4
+-- version 0.0.5
 --
 -- an interactive error screen for picotron.
 -- on error, shows the stack, local variables,
@@ -40,6 +40,12 @@
 -- - `debug.traceback`
 --
 -- ## version history 
+--
+-- version 0.0.5
+--
+-- - future proofing: gracefully handle when
+--   various parts of the `debug` module aren't
+--   available
 --
 -- version 0.0.4
 --
@@ -232,33 +238,45 @@ local function rebuild ()
 
   -- rebuild variables
   do
-    local local_index = 1
-    repeat
-      local name, value = debug.getlocal (error_thread, frame.depth, local_index)
-      if name then
-        if name ~= '(temporary)' then
-          table.insert (variables, {
-            key = name,
-            value = value,
-          })
-        end
-        local_index = local_index + 1
-      end
-    until not name
-
-    local info = debug.getinfo (error_thread, frame.depth)
-    if info and info.func then
-      local upvalue_index = 1
+    if debug.getlocal then
+      local local_index = 1
       repeat
-        local name, value = debug.getupvalue (info.func, upvalue_index)
+        local name, value = debug.getlocal (error_thread, frame.depth, local_index)
         if name then
-          table.insert (variables, {
-            key = name,
-            value = value,
-          })
-          upvalue_index = upvalue_index + 1
+          if name ~= '(temporary)' then
+            table.insert (variables, {
+              key = name,
+              value = value,
+            })
+          end
+          local_index = local_index + 1
         end
       until not name
+    else
+      table.insert (variables, {
+        error = 'no debug.getlocal, can\'t show locals'
+      })
+    end
+
+    if debug.getupvalue then
+      local info = debug.getinfo (error_thread, frame.depth)
+      if info and info.func then
+        local upvalue_index = 1
+        repeat
+          local name, value = debug.getupvalue (info.func, upvalue_index)
+          if name then
+            table.insert (variables, {
+              key = name,
+              value = value,
+            })
+            upvalue_index = upvalue_index + 1
+          end
+        until not name
+      end
+    else
+      table.insert (variables, {
+        error = 'no debug.getupvalue, can\'t show upvalues'
+      })
     end
   end
 
@@ -418,9 +436,13 @@ local function error_draw ()
     variable_count = variable_count + 1
     local hovered = variable == last_hovered_variable
     local y_before = y
-    print_horizontal (indent .. variable.key, hovered and 7 or 6)
-    print_horizontal (': ', variable == last_hovered_variable and 7 or 5)
-    print_line (safe_tostring(variable.value))
+    if variable.error then
+      print_line ('  ' .. variable.error, 8)
+    else
+      print_horizontal (indent .. variable.key, hovered and 7 or 6)
+      print_horizontal (': ', variable == last_hovered_variable and 7 or 5)
+      print_line (safe_tostring(variable.value))
+    end
 
     if over_section and type (variable.value) == 'table' then
       if mx >= 0 and mx < W/2 and my >= y_before and my < y then
@@ -513,6 +535,11 @@ local user_draw = rawget (_G, '_draw')
 assert (user_draw and user_update,
   'please include install_error_handler after defining both _update and _draw')
 
+if not rawget (_G, 'debug') or not debug.traceback or not debug.getinfo then
+  printh 'error explorer: debug module not available, error explorer will be disabled'
+  return
+end
+
 local function call_error_event (fn, ...)
   -- if there's an error in our update or draw, throw the
   -- original error as well as the new error
@@ -528,7 +555,7 @@ local function call_protected (fn)
   local thread = cocreate (fn)
   local success, message = coresume(thread)
   if costatus (thread) ~= 'dead' then
-    call_error_event (on_error, thread, 'setup_error_display.lua: _update and _draw shouldn\'t yield')
+    call_error_event (on_error, thread, 'error explorer: _update and _draw shouldn\'t yield')
   end
   if not success then
     call_error_event (on_error, thread, message)
