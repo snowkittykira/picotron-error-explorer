@@ -2,7 +2,7 @@
 --
 -- by kira
 --
--- version 0.0.5
+-- version 0.0.6
 --
 -- an interactive error screen for picotron.
 -- on error, shows the stack, local variables,
@@ -40,6 +40,13 @@
 -- - `debug.traceback`
 --
 -- ## version history 
+--
+-- version 0.0.6
+-- - on error:
+--   - show cursor
+--   - make window resizable
+-- - automatically adjust layout to window size
+-- - support yielding (since fetch sometimes yields)
 --
 -- version 0.0.5
 --
@@ -201,9 +208,6 @@ local source_lines = {}
 
 ---- main events ---------------------------------
 
-local W = 480
-local H = 270
-
 local function rebuild ()
   -- rebuild stack frame info
   stack_frames = {}
@@ -346,6 +350,9 @@ local function error_update ()
 end
 
 local function error_draw ()
+  local W = get_display():width()
+  local H = get_display():height()
+
   local prefix = use_small_font and '\014' or ''
   local font_height = (use_small_font and 6 or 11)
   local mx, my = mouse()
@@ -481,6 +488,10 @@ end
 local function reset ()
   -- based on reset() from /system/lib/head.lua
   -- see that fn for info
+  window {
+    cursor = 1,
+    resizable = true,
+  }
   note ()
   -- picotron segfaults if we call clip() during init
   if init_done then
@@ -533,7 +544,7 @@ local user_update = rawget (_G, '_update')
 local user_draw = rawget (_G, '_draw')
 
 assert (user_draw and user_update,
-  'please include install_error_handler after defining both _update and _draw')
+  'please include error_explorer after defining both _update and _draw')
 
 if not rawget (_G, 'debug') or not debug.traceback or not debug.getinfo then
   printh 'error explorer: debug module not available, error explorer will be disabled'
@@ -554,8 +565,9 @@ local function call_protected (fn)
   -- for picotron compatibility
   local thread = cocreate (fn)
   local success, message = coresume(thread)
-  if costatus (thread) ~= 'dead' then
-    call_error_event (on_error, thread, 'error explorer: _update and _draw shouldn\'t yield')
+  while costatus (thread) ~= 'dead' do
+    yield ()
+    success, message = coresume (thread)
   end
   if not success then
     call_error_event (on_error, thread, message)

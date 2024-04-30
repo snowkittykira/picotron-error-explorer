@@ -2,7 +2,7 @@
 
 by kira
 
-version 0.0.5
+version 0.0.6
 
 an interactive error screen for picotron.
 on error, shows the stack, local variables,
@@ -40,6 +40,13 @@ the following debug apis are used:
 - `debug.traceback`
 
 ## version history 
+
+version 0.0.6
+- on error:
+  - show cursor
+  - make window resizable
+- automatically adjust layout to window size
+- support yielding (since fetch sometimes yields)
 
 version 0.0.5
 
